@@ -3,10 +3,11 @@ from typing import Callable, Mapping, Optional, Union
 
 import e3nn
 import e3nn.o3
+from openequivariance.benchmark.tpp_creation_utils import FullyConnectedTPProblem
+from openequivariance import TensorProductConv, TensorProduct
 import torch
 from torch import nn
 
-from e3tools import scatter
 
 from ._gate import Gated
 from ._interaction import LinearSelfInteraction
@@ -76,13 +77,18 @@ class Conv(nn.Module):
         self.irreps_sh = e3nn.o3.Irreps(irreps_sh)
 
         if tensor_product is None:
-            tensor_product = functools.partial(
-                e3nn.o3.FullyConnectedTensorProduct,
+            tensor_product_problem = FullyConnectedTPProblem(
+                irreps_in1=irreps_in,
+                irreps_in2=irreps_sh,
+                irreps_out=irreps_out,
                 shared_weights=False,
                 internal_weights=False,
             )
+            self.tp_conv = TensorProductConv(tensor_product_problem)
+            self.tp = TensorProduct(tensor_product_problem)
+        else:
+            raise NotImplementedError("Temporarily Not Implemented")
 
-        self.tp = tensor_product(irreps_in, irreps_sh, irreps_out)
         if radial_nn is None:
             radial_nn = functools.partial(
                 ScalarMLP,
@@ -90,7 +96,7 @@ class Conv(nn.Module):
                 activation_layer=nn.SiLU,
             )
 
-        self.radial_nn = radial_nn(edge_attr_dim, self.tp.weight_numel)
+        self.radial_nn = radial_nn(edge_attr_dim, tensor_product_problem.weight_numel)
 
     def apply_per_edge(self, node_attr_src, edge_attr, edge_sh):
         return self.tp(node_attr_src, edge_sh, self.radial_nn(edge_attr))
@@ -112,13 +118,9 @@ class Conv(nn.Module):
         -------
         out: [N, irreps_out.dim]
         """
-        N = node_attr.shape[0]
-
-        src, dst = edge_index
-        out_ij = self.apply_per_edge(node_attr[src], edge_attr, edge_sh)
-        out = scatter(out_ij, dst, dim=0, dim_size=N, reduce="mean")
-
-        return out
+        return self.tp_conv(
+            node_attr, edge_sh, self.radial_nn(edge_attr), edge_index[0], edge_index[1]
+        )
 
 
 class SeparableConv(Conv):

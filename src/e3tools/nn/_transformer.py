@@ -3,6 +3,8 @@ import itertools
 
 import e3nn
 import e3nn.o3
+from openequivariance.benchmark.tpp_creation_utils import FullyConnectedTPProblem
+from openequivariance import TensorProduct as OEQTensorProduct
 from torch import nn
 
 from e3tools import scatter
@@ -213,9 +215,15 @@ class MultiheadAttention(nn.Module):
             edge_attr_dim=edge_attr_dim,
         )
 
-        self.dot = e3nn.o3.FullyConnectedTensorProduct(
+        self.weight_repo = e3nn.o3.FullyConnectedTensorProduct(
             irreps_query_per_head, irreps_key_per_head, "0e"
         )
+        self.tensor_product_problem = FullyConnectedTPProblem(
+            irreps_query_per_head,
+            irreps_key_per_head,
+            "0e",
+        )
+        self.dot = OEQTensorProduct(self.tensor_product_problem)
 
         self.lin_out = e3nn.o3.Linear(irreps_out_split, irreps_out)
 
@@ -247,12 +255,16 @@ class MultiheadAttention(nn.Module):
         v = self.h_v.apply_per_edge(node_attr[src], edge_attr, edge_sh)
 
         # create head index as batch-like dimension
-        q = q.view(N, self.num_heads, -1)
-        k = k.view(E, self.num_heads, -1)
         v = v.view(E, self.num_heads, -1)
+        q_dst = q[dst].view(E * self.num_heads, -1)
+        k_view = k.view(E * self.num_heads, -1)
 
         # compute softmax
-        exp = self.dot(q[dst], k).exp()
+        exp = (
+            self.dot(q_dst, k_view, self.weight_repo.weight)
+            .exp()
+            .view(E, self.num_heads, -1)
+        )
         z = scatter(exp, dst, dim=0, dim_size=N, reduce="mean")
         alpha = exp / z[dst]
 

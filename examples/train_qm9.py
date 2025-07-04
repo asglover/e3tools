@@ -257,11 +257,11 @@ if __name__ == "__main__":
             num_attention_heads=1,
         )
 
-    # Compile the model
-    model = torch.compile(model, fullgraph=True, dynamic=True)
-
     # Move model to device
     model.to(device)
+
+    # Compile the model
+    model = torch.compile(model, fullgraph=True, dynamic=True)
 
     # Call the model to avoid compilation time during training
     dummy_data = next(iter(train_loader)).to(device)
